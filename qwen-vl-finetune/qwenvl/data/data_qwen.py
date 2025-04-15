@@ -23,6 +23,7 @@ import transformers
 
 from . import data_list
 from .rope2d import get_rope_index_25, get_rope_index_2
+from .utils_3dvl import get_coord3d, get_coord3d_info, coord3d_to_flat_patches, resize_coord3d_resize
 
 IGNORE_INDEX = -100
 IMAGE_TOKEN_INDEX = 151655
@@ -31,6 +32,34 @@ DEFAULT_IMAGE_TOKEN = "<image>"
 DEFAULT_VIDEO_TOKEN = "<video>"
 
 local_rank = None
+
+
+# This is the resize function of Qwen2.5-VL
+def smart_resize(
+    height: int, width: int, factor: int = 28, min_pixels: int = 56 * 56, max_pixels: int = 14 * 14 * 4 * 1280
+):
+    """Rescales the image so that the following conditions are met:
+    1. Both dimensions (height and width) are divisible by 'factor'.
+    2. The total number of pixels is within the range ['min_pixels', 'max_pixels'].
+    3. The aspect ratio of the image is maintained as closely as possible.
+    """
+    if height < factor or width < factor:
+        raise ValueError(f"height:{height} or width:{width} must be larger than factor:{factor}")
+    elif max(height, width) / min(height, width) > 200:
+        raise ValueError(
+            f"absolute aspect ratio must be smaller than 200, got {max(height, width) / min(height, width)}"
+        )
+    h_bar = round(height / factor) * factor
+    w_bar = round(width / factor) * factor
+    if h_bar * w_bar > max_pixels:
+        beta = math.sqrt((height * width) / max_pixels)
+        h_bar = math.floor(height / beta / factor) * factor
+        w_bar = math.floor(width / beta / factor) * factor
+    elif h_bar * w_bar < min_pixels:
+        beta = math.sqrt(min_pixels / (height * width))
+        h_bar = math.ceil(height * beta / factor) * factor
+        w_bar = math.ceil(width * beta / factor) * factor
+    return h_bar, w_bar
 
 
 def rank0_print(*args):
@@ -128,8 +157,9 @@ def preprocess_qwen_2_visual(
 class LazySupervisedDataset(Dataset):
     """Dataset for supervised fine-tuning."""
 
-    def __init__(self, tokenizer: transformers.PreTrainedTokenizer, data_args):
+    def __init__(self, tokenizer: transformers.PreTrainedTokenizer, data_args, enable_3d=False):
         super(LazySupervisedDataset, self).__init__()
+        self.enable_3d = enable_3d
 
         dataset = data_args.dataset_use.split(",")
         dataset_list = data_list(dataset)
@@ -305,6 +335,11 @@ class LazySupervisedDataset(Dataset):
         if "image" in sources[0]:
             image_folder = self.list_data_dict[i]["data_path"]
             image_file = self.list_data_dict[i]["image"]
+            len_image_file = len(image_file) if isinstance(image_file, List) else 1
+            if self.enable_3d:
+                depth_file = self.list_data_dict[i]["depth"] if "depth" in sources[0] else [None for _ in range(len_image_file)]
+                cam_param_file = self.list_data_dict[i]["camera_parameters"] if "camera_parameters" in sources[0] else [None for _ in range(len_image_file)]
+
             if isinstance(image_file, List):
                 if len(image_file) > 1:
                     image_file = [
@@ -312,15 +347,84 @@ class LazySupervisedDataset(Dataset):
                     ]
                     results = [self.process_image_unified(file) for file in image_file]
                     image, grid_thw = zip(*results)
+                    if self.enable_3d:
+                        depth_file = [os.path.join(image_folder, f) for f in depth_file]
+                        cam_param_file = [os.path.join(image_folder, f) for f in cam_param_file]
+                        coord3d_list = []
+                        for j in range(len(image_file)):
+                            img = Image.open(image_file[j])
+                            coord3d = get_coord3d(
+                                img,
+                                depth_file[j],
+                                cam_param_file[j],
+                            )
+                            orig_width, orig_height = img.size
+                            factor = self.data_args.image_processor.patch_size * self.data_args.image_processor.merge_size
+                            min_pixels, max_pixels = self.data_args.image_processor.min_pixels, self.data_args.image_processor.max_pixels
+                            new_height, new_width = smart_resize(orig_height, orig_width, factor, min_pixels, max_pixels)
+                            coord3d = resize_coord3d_resize(coord3d, (new_height, new_width), mode="bilinear")
+                            coord3d = coord3d_to_flat_patches(coord3d, 
+                                                              self.data_args.image_processor.patch_size, 
+                                                              self.data_args.image_processor.merge_size, 
+                                                              self.data_args.image_processor.temporal_patch_size)
+                            coord3d = torch.tensor(coord3d)
+                            coord3d_list.append(coord3d)
                 else:
                     image_file = image_file[0]
                     image_file = os.path.join(image_folder, image_file)
                     image, grid_thw = self.process_image_unified(image_file)
                     image = [image]
+                    if self.enable_3d:
+                        assert len(depth_file) == 1
+                        assert len(cam_param_file) == 1
+                        depth_file = [os.path.join(image_folder, f) for f in depth_file][0]
+                        cam_param_file = [os.path.join(image_folder, f) for f in cam_param_file][0]
+                        img = Image.open(image_file)
+                        coord3d = get_coord3d(
+                            img,
+                            depth_file,
+                            cam_param_file,
+                        )
+                        orig_width, orig_height = img.size
+                        factor = self.data_args.image_processor.patch_size * self.data_args.image_processor.merge_size
+                        min_pixels, max_pixels = self.data_args.image_processor.min_pixels, self.data_args.image_processor.max_pixels
+                        new_height, new_width = smart_resize(orig_height, orig_width, factor, min_pixels, max_pixels)
+                        coord3d = resize_coord3d_resize(coord3d, (new_height, new_width), mode="bilinear")
+                        coord3d = coord3d_to_flat_patches(coord3d,
+                                                          self.data_args.image_processor.patch_size, 
+                                                          self.data_args.image_processor.merge_size, 
+                                                          self.data_args.image_processor.temporal_patch_size)
+                        coord3d = torch.tensor(coord3d)
+                        coord3d_list = [
+                            coord3d
+                        ]
             else:
                 image_file = os.path.join(image_folder, image_file)
                 image, grid_thw = self.process_image_unified(image_file)
                 image = [image]
+                if self.enable_3d:
+                    depth_file = os.path.join(image_folder, depth_file)
+                    cam_param_file = os.path.join(image_folder, cam_param_file)
+                    img = Image.open(image_file)
+                    coord3d = get_coord3d(
+                        img,
+                        depth_file,
+                        cam_param_file,
+                    )
+                    orig_width, orig_height = img.size
+                    factor = self.data_args.image_processor.patch_size * self.data_args.image_processor.merge_size
+                    min_pixels, max_pixels = self.data_args.image_processor.min_pixels, self.data_args.image_processor.max_pixels
+                    new_height, new_width = smart_resize(orig_height, orig_width, factor, min_pixels, max_pixels)
+                    coord3d = resize_coord3d_resize(coord3d, (new_height, new_width), mode="bilinear")
+                    coord3d = coord3d_to_flat_patches(coord3d,
+                                                        self.data_args.image_processor.patch_size, 
+                                                        self.data_args.image_processor.merge_size, 
+                                                        self.data_args.image_processor.temporal_patch_size)
+                    coord3d = torch.tensor(coord3d)
+                    coord3d_list = [
+                        coord3d
+                    ]
+            
             grid_thw_merged = copy.deepcopy(grid_thw)
             if not isinstance(grid_thw, Sequence):
                 grid_thw_merged = [grid_thw_merged]
@@ -398,6 +502,8 @@ class LazySupervisedDataset(Dataset):
         if "image" in self.list_data_dict[i]:
             data_dict["pixel_values"] = image
             data_dict["image_grid_thw"] = grid_thw
+            if self.enable_3d:
+                data_dict["coord3d"] = coord3d_list
         # video exist in the data
         elif "video" in self.list_data_dict[i]:
             data_dict["pixel_values_videos"] = video
@@ -585,19 +691,35 @@ class FlattenedDataCollatorForSupervisedDataset(DataCollatorForSupervisedDataset
         batch["pixel_values_videos"] = concat_videos
         batch["video_grid_thw"] = video_grid_thw
 
+        if "coord3d" in instances[0]:
+            coord3d = list(
+                itertools.chain(
+                    *(
+                        instance["coord3d"]
+                        for instance in instances
+                        if "coord3d" in instance
+                    )
+                )
+            )
+            coord3d = torch.cat([c for c in coord3d], dim=0)
+            batch["coord3d"] = coord3d
+
         return batch
 
 
 def make_supervised_data_module(
-    tokenizer: transformers.PreTrainedTokenizer, data_args
+    tokenizer: transformers.PreTrainedTokenizer, data_args, enable_3d=False
 ) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
-    train_dataset = LazySupervisedDataset(tokenizer=tokenizer, data_args=data_args)
+    train_dataset = LazySupervisedDataset(tokenizer=tokenizer, data_args=data_args, enable_3d=enable_3d)
     if data_args.data_flatten:
         data_collator = FlattenedDataCollatorForSupervisedDataset(tokenizer=tokenizer)
         return dict(
             train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator
         )
+
+    assert enable_3d is False, "3D is not supported for DataCollatorForSupervisedDataset yet. data_args.data_flatten must be True for 3D."
+
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
     return dict(
         train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator

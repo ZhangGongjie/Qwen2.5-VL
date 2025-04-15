@@ -6,9 +6,11 @@ from typing import Dict, Optional, Sequence, List
 @dataclass
 class ModelArguments:
     model_name_or_path: Optional[str] = field(default="Qwen/Qwen2.5-VL-3B-Instruct")
+    enable_3d: bool = field(default=False)
     tune_mm_llm: bool = field(default=False)
     tune_mm_mlp: bool = field(default=False)
     tune_mm_vision: bool = field(default=False)
+    tune_mm_coord: bool = field(default=False)
 
 @dataclass
 class DataArguments:
@@ -35,3 +37,4 @@ class TrainingArguments(transformers.TrainingArguments):
     )
     mm_projector_lr: Optional[float] = None
     vision_tower_lr: Optional[float] = None
+    coord_tower_lr: Optional[float] = None

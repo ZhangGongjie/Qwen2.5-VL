@@ -8,3 +8,9 @@ wheels/
 
 # venv
 .venv
+
+# wandb
+wandb/
+
+# ckpt
+Qwen2.5-VL-*B-Instruct*

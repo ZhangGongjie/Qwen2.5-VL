@@ -43,6 +43,7 @@ from qwenvl.train.argument import (
     TrainingArguments,
 )
 from transformers import AutoTokenizer, AutoProcessor, Qwen2VLImageProcessor, Trainer
+from qwenvl.model.qwen2_5_3dvl import Qwen2_5_3DVL_ForConditionalGeneration
 
 local_rank = None
 
@@ -81,6 +82,14 @@ def set_model(model_args, model):
     else:
         for n, p in model.visual.merger.named_parameters():
             p.requires_grad = False
+    
+    if model_args.enable_3d:
+        if model_args.tune_mm_coord:
+            for n, p in model.coord_tower.named_parameters():
+                p.requires_grad = True
+        else:
+            for n, p in model.coord_tower.named_parameters():
+                p.requires_grad = False
 
     if model_args.tune_mm_llm:
         for n, p in model.model.named_parameters():
@@ -104,17 +113,30 @@ def train(attn_implementation="flash_attention_2"):
     os.makedirs(training_args.output_dir, exist_ok=True)
 
     if "qwen2.5" in model_args.model_name_or_path.lower():
-        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            attn_implementation=attn_implementation,
-            torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
-        )
-        data_args.image_processor = AutoProcessor.from_pretrained(
-            model_args.model_name_or_path,
-        ).image_processor
-        data_args.model_type = "qwen2.5vl"
+        if model_args.enable_3d:
+            model = Qwen2_5_3DVL_ForConditionalGeneration.from_pretrained(
+                model_args.model_name_or_path,
+                cache_dir=training_args.cache_dir,
+                attn_implementation=attn_implementation,
+                torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+            )
+            data_args.image_processor = AutoProcessor.from_pretrained(
+                model_args.model_name_or_path,
+            ).image_processor
+            data_args.model_type = "qwen2.5vl"
+        else:
+            model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                model_args.model_name_or_path,
+                cache_dir=training_args.cache_dir,
+                attn_implementation=attn_implementation,
+                torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+            )
+            data_args.image_processor = AutoProcessor.from_pretrained(
+                model_args.model_name_or_path,
+            ).image_processor
+            data_args.model_type = "qwen2.5vl"
     else:
+        assert model_args.enable_3d is False, "Qwen2VL is not supported for 3D. Please use Qwen2.5VL instead."
         model = Qwen2VLForConditionalGeneration.from_pretrained(
             model_args.model_name_or_path,
             cache_dir=training_args.cache_dir,
@@ -153,7 +175,7 @@ def train(attn_implementation="flash_attention_2"):
         model.visual.print_trainable_parameters()
         model.model.print_trainable_parameters()
 
-    data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
+    data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args, enable_3d=model_args.enable_3d)
     trainer = Trainer(
         model=model, processing_class=tokenizer, args=training_args, **data_module
     )
@@ -166,9 +188,13 @@ def train(attn_implementation="flash_attention_2"):
     trainer.save_state()
     data_args.image_processor.save_pretrained(training_args.output_dir)
 
-    source_path = os.path.join(model_args.model_name_or_path, "chat_template.json")
-    template_path = os.path.join(training_args.output_dir, "chat_template.json")
-    shutil.copy2(source_path, template_path)
+    try:
+        source_path = os.path.join(model_args.model_name_or_path, "chat_template.json")
+        template_path = os.path.join(training_args.output_dir, "chat_template.json")
+        shutil.copy2(source_path, template_path)
+    except FileNotFoundError:
+        rank0_print("[WARNING]  chat_template.json not found in model_name_or_path.")
+        rank0_print("[WARNING]  Skipping copy of chat_template.json to output_dir.")
 
     model.config.use_cache = True
 

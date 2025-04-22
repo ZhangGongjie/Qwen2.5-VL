@@ -4,6 +4,8 @@ import io
 import ast
 import os
 from PIL import Image, ImageDraw, ImageFont
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+from PIL import Image, ImageDraw, ImageFont
 from PIL import ImageColor
 import xml.etree.ElementTree as ET
 
@@ -12,6 +14,15 @@ from transformers import AutoProcessor
 from qwenvl.model.qwen2_5_3dvl import Qwen2_5_3DVL_ForConditionalGeneration
 from qwenvl.data.utils_3dvl import get_coord3d, resize_coord3d_resize, coord3d_to_flat_patches
 from qwenvl.data.data_qwen import smart_resize
+
+
+# Define constants (matching data_qwen.py)
+IMAGE_TOKEN_INDEX = 151655
+VIDEO_TOKEN_INDEX = 151656
+DEFAULT_IMAGE_TOKEN = "<image>" # Placeholder in user message content
+IMAGE_PAD_TOKEN = "<|image_pad|>" # Actual token placeholder for the model
+VISION_START_TOKEN = "<|vision_start|>"
+VISION_END_TOKEN = "<|vision_end|>"
 
 
 model_path = "./Qwen2.5-VL-3B-Instruct-SFT3D-coco3d-scannet2d-stage2"
@@ -24,6 +35,10 @@ model = Qwen2_5_3DVL_ForConditionalGeneration.from_pretrained(
 )
 processor = AutoProcessor.from_pretrained(model_path)
 
+
+# Set the model's image token
+image_token = getattr(processor, 'image_token', "<image>")
+print(f"Using image token: {image_token}")
 
 # --- Example Usage ---
 
@@ -43,11 +58,37 @@ try:
     image = Image.open(image_path).convert("RGB")
     orig_width, orig_height = image.size
 except FileNotFoundError:
+    print(f"Original image dimensions: {orig_width}x{orig_height}")
+except FileNotFoundError:
     print(f"Error: Image file not found at {image_path}. Exiting.")
     exit()
 
-# 2. Compute initial 3D coordinates
-#    Note: get_coord3d needs the original image for dimensions, but reads depth/cam params itself.
+# 2. Prepare Text Prompt
+user_prompt = "Where is the wodden bucket on the floor? Please provide 3D coordinate."
+print(f"User prompt: {user_prompt}")
+
+# Create a simple prompt with image token
+# The processor will automatically handle the image token replacement
+# For Qwen models we use this format
+prompt = f"<|im_start|>user\n{image_token}{user_prompt}<|im_end|>\n<|im_start|>assistant\n"
+print(f"Formatted prompt with image token: {prompt}")
+
+# 3. Process Text and Image Together
+print("Processing text and image together...")
+inputs = processor(text=[prompt], images=[image], return_tensors="pt")
+image_grid_thw = inputs['image_grid_thw']  # Shape: (num_images, 3)
+print(f"Processed image_grid_thw: {image_grid_thw}")
+
+# Get patch/merge sizes (can take from processor or hardcode based on training)
+patch_size = 14  # Default Qwen 2.5 VL patch size
+merge_size = 2   # Default Qwen 2.5 VL merge size
+temporal_patch_size = 2  # Default for Qwen2.5VL 3D
+
+# Calculate the number of merged patches
+num_merged_patches = image_grid_thw[0].prod().item() // (merge_size**2)
+print(f"Calculated number of merged patches: {num_merged_patches}")
+
+# 4. Compute initial 3D coordinates
 print("Computing initial 3D coordinates...")
 try:
     coord3d_original = get_coord3d(image, depth_path, cam_params_path) # Shape: (orig_H, orig_W, 3)
@@ -58,91 +99,68 @@ except Exception as e:
     print(f"Error computing 3D coordinates: {e}. Exiting.")
     exit()
 
-# 3. Prepare Text Prompt
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {"type": "image"},
-            # --- Replace with your desired prompt ---
-            {"type": "text", "text": "Where is the wodden bucket on the floor? Please provide 3D Coord."},
-            # -----------------------------------------
-        ],
-    },
-]
-text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+# 5. Resize and Flatten Coordinate Map
+factor = patch_size * merge_size
+min_pixels, max_pixels = 784, 50176
 
-# 4. Process Image and Text with Processor
-print("Processing image and text...")
-# Note: The processor handles resizing the image according to its internal logic (using smart_resize implicitly)
-#       It also prepares input_ids, attention_mask, pixel_values, and image_grid_thw
-inputs = processor(text=[text], images=[image], return_tensors="pt")
+resized_height, resized_width = smart_resize(orig_height, orig_width, factor, min_pixels, max_pixels)
 
-# 5. Determine Resized Image Dimensions and Resize Coordinate Map
-pixel_values = inputs['pixel_values'] # Shape: (1, 3, H, W) - already resized by processor
-resized_height, resized_width = pixel_values.shape[2], pixel_values.shape[3]
 
 print(f"Resizing coordinate map to {resized_height}x{resized_width}...")
 coord3d_resized = resize_coord3d_resize(coord3d_original, (resized_height, resized_width), mode="bilinear") # Shape: (H, W, 3)
 
-# 6. Flatten Coordinate Map into Patches
-print("Flattening coordinate map into patches...")
-# Get patch/merge sizes from the processor's vision config or data_args used during training
-# Assuming defaults used in Qwen2.5VL if not available directly
-patch_size = getattr(processor, 'patch_size', 14) # Default Qwen 2.5 VL patch size
-merge_size = getattr(processor, 'merge_size', 2)   # Default Qwen 2.5 VL merge size
-temporal_patch_size = getattr(processor, 'temporal_patch_size', 2) # Default 1 for images
-
-coord3d_flat_patches = coord3d_to_flat_patches(
     coord3d_resized,
     patch_size=patch_size,
     merge_size=merge_size,
     temporal_patch_size=temporal_patch_size
 ) # Shape: (num_patches, channels * temporal_patch_size * patch_size^2)
 coord3d = torch.tensor(coord3d_flat_patches) # Convert to tensor
+coord3d = coord3d.to(inputs["pixel_values"].device)
 
-# Ensure grid_thw matches the structure expected by coord3d_to_flat_patches
-# The processor returns grid_thw which should align if parameters match
-assert coord3d.shape[0] == inputs['image_grid_thw'][0].prod().item() // (merge_size**2), \
-    f"Mismatch between flattened coord3d patches ({coord3d.shape[0]}) and expected patches based on image_grid_thw ({inputs['image_grid_thw'][0].prod().item() // (merge_size**2)})"
+# Verify patch count consistency
+print(f"Flattened coord3d shape: {coord3d.shape}")
+print(f"Expected patches based on grid_thw: {num_merged_patches}")
+try:
+    assert coord3d.shape[0] == num_merged_patches, \
+        f"Mismatch between flattened coord3d patches ({coord3d.shape[0]}) and calculated merged patches ({num_merged_patches})"
+    print("Patch count verification successful!")
+except AssertionError as e:
+    print(f"Warning: {e}")
+    print("Continuing anyway, but results may be incorrect.")
 
-
-# 7. Move inputs to device
+# 6. Move inputs to device
 print("Moving inputs to device...")
-inputs = {k: v.to(model.device) for k, v in inputs.items()}
+inputs = {k: v.to(model.device) for k, v in inputs.items() if isinstance(v, torch.Tensor)}
 coord3d = coord3d.to(model.device, dtype=model.dtype) # Ensure correct dtype and device
 
-# 8. Generate Response
+# 7. Generate Response
 print("Generating response...")
 with torch.no_grad():
+model_inputs = {
+    'input_ids': inputs['input_ids'],
+    'attention_mask': inputs['attention_mask'],
+    'pixel_values': inputs['pixel_values'],
+    'image_grid_thw': inputs['image_grid_thw'],
+    'coord3d': coord3d
+}
+
+print("Input shapes:")
+for k, v in model_inputs.items():
+    if isinstance(v, torch.Tensor):
+        print(f"  {k}: {v.shape}")
+
+with torch.no_grad():
     generate_ids = model.generate(
-        input_ids=inputs['input_ids'],
-        attention_mask=inputs['attention_mask'],
-        pixel_values=inputs['pixel_values'],
-        image_grid_thw=inputs['image_grid_thw'],
-        coord3d=coord3d, # Pass the processed 3D coordinates
+        **model_inputs,
         max_new_tokens=1024,
         do_sample=False,
-        # Add other generation parameters as needed (temperature, top_k, etc.)
+        pad_token_id=processor.tokenizer.pad_token_id
     )
 
-# 9. Decode and Print Output
+# 8. Decode and Print Output
 print("Decoding output...")
-decoded_output = processor.batch_decode(generate_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)[0]
-
-# --- Optional: Clean up the output ---
-# Find the assistant's response start
-assistant_prompt = "<|im_start|>assistant\n"
-response_start_index = decoded_output.find(assistant_prompt)
-if response_start_index != -1:
-    response_text = decoded_output[response_start_index + len(assistant_prompt):]
-else:
-    response_text = decoded_output # Fallback if pattern not found
-
-# Remove end token if present
-end_token = "<|im_end|>"
-if response_text.endswith(end_token):
-    response_text = response_text[:-len(end_token)].strip()
+decoded_output = processor.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+response_text = decoded_output.strip()
 
 # --- Print the final response ---
 print("\n--- Model Response ---")

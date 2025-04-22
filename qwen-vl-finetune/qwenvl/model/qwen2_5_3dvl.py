@@ -79,7 +79,7 @@ class Qwen2_5_3DVL_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
                         print(f"Copied missing coord_tower weight (size: {visual_dict[name].ds_shape}): {full_name} from visual tower.")
     
     def prepare_inputs_for_generation(self, *args, coord3d=None, **kwargs):
-        model_inputs = self.super().prepare_inputs_for_generation(*args, **kwargs)
+        model_inputs = super().prepare_inputs_for_generation(*args, **kwargs)
         if coord3d is not None:
             model_inputs["coord3d"] = coord3d
         else:

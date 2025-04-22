@@ -84,11 +84,11 @@ def set_model(model_args, model):
             p.requires_grad = False
     
     if model_args.enable_3d:
-        if model_args.tune_mm_coord:
-            for n, p in model.coord_tower.named_parameters():
+        if model_args.tune_mm_vggt:
+            for n, p in model.vggt.named_parameters():
                 p.requires_grad = True
         else:
-            for n, p in model.coord_tower.named_parameters():
+            for n, p in model.vggt.named_parameters():
                 p.requires_grad = False
 
     if model_args.tune_mm_llm:

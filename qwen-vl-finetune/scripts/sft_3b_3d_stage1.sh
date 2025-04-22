@@ -15,7 +15,7 @@ llm=Qwen/Qwen2.5-VL-3B-Instruct  # Using HuggingFace model ID
 
 
 # Training hyperparameters
-lr=2e-7
+lr=2e-5
 batch_size=4
 grad_accum_steps=4
 
@@ -23,11 +23,11 @@ grad_accum_steps=4
 entry_file=qwenvl/train/train_qwen.py
 
 # Dataset configuration (replace with public dataset names)
-datasets=coco_complex_reasoning_3d_77k,coco_conversation_3d_58k,coco_detail_3d_23k,coco_3dcoord_grounding%50,scannet_2d_embodied_dialogue_train,scannet_2d_embodied_planning_train,scannet_2d_embodied_qa_train,scannet_2d_room_description_train,scannet_2d_3dcoord_grounding_train%50
+datasets=scannet_2d_embodied_dialogue_train,scannet_2d_embodied_planning_train,scannet_2d_embodied_qa_train,scannet_2d_room_description_train,scannet_2d_3dcoord_grounding_train
 
 # Output configuration
-run_name="qwen2.5-3b-3dvl-coco3d-scannet2d-stage1"
-output_dir=./Qwen2.5-VL-3B-Instruct-SFT3D-coco3d-scannet2d-stage1
+run_name="qwen2.5-3b-3dvl-vggt-scannet2d-stage1"
+output_dir=./Qwen2.5-VL-3B-Instruct-3dvl-vggt-scannet2d-stage1
 
 # Training arguments
 args="
@@ -39,10 +39,10 @@ args="
     --tune_mm_vision False \
     --tune_mm_mlp True \
     --tune_mm_llm False \
-    --tune_mm_coord True \
+    --tune_mm_vggt True \
     --bf16 \
     --output_dir ${output_dir} \
-    --num_train_epochs 0.5 \
+    --num_train_epochs 1.0 \
     --per_device_train_batch_size ${batch_size} \
     --per_device_eval_batch_size $((batch_size*2)) \
     --gradient_accumulation_steps ${grad_accum_steps} \
@@ -53,9 +53,9 @@ args="
     --save_steps 1000 \
     --save_total_limit 20 \
     --learning_rate ${lr} \
-    --mm_projector_lr 2e-6 \
+    --mm_projector_lr 1e-5 \
     --vision_tower_lr ${lr} \
-    --coord_tower_lr 1e-5 \
+    --vggt_tower_lr 1e-5 \
     --weight_decay 0.01 \
     --warmup_ratio 0.03 \
     --max_grad_norm 1 \

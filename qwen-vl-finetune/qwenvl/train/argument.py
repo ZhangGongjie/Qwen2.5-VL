@@ -10,7 +10,7 @@ class ModelArguments:
     tune_mm_llm: bool = field(default=False)
     tune_mm_mlp: bool = field(default=False)
     tune_mm_vision: bool = field(default=False)
-    tune_mm_coord: bool = field(default=False)
+    tune_mm_vggt: bool = field(default=False)
 
 @dataclass
 class DataArguments:
@@ -37,4 +37,4 @@ class TrainingArguments(transformers.TrainingArguments):
     )
     mm_projector_lr: Optional[float] = None
     vision_tower_lr: Optional[float] = None
-    coord_tower_lr: Optional[float] = None
+    vggt_tower_lr: Optional[float] = None

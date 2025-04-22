@@ -11,11 +11,11 @@ NNODES=${WORLD_SIZE:-1}
 deepspeed=./scripts/zero3.json
 
 # Model configuration
-llm=./Qwen2.5-VL-3B-Instruct-SFT3D-coco3d-scannet2d-stage1
+llm=./Qwen2.5-VL-3B-Instruct-3dvl-vggt-scannet2d-stage1
 
 
 # Training hyperparameters
-lr=2e-7
+lr=2e-5
 batch_size=4
 grad_accum_steps=4
 
@@ -23,11 +23,11 @@ grad_accum_steps=4
 entry_file=qwenvl/train/train_qwen.py
 
 # Dataset configuration (replace with public dataset names)
-datasets=coco_complex_reasoning_3d_77k,coco_conversation_3d_58k,coco_detail_3d_23k,coco_3dcoord_grounding,scannet_2d_embodied_dialogue_train,scannet_2d_embodied_planning_train,scannet_2d_embodied_qa_train,scannet_2d_room_description_train,scannet_2d_3dcoord_grounding_train
+datasets=scannet_2d_embodied_dialogue_train,scannet_2d_embodied_planning_train,scannet_2d_embodied_qa_train,scannet_2d_room_description_train,scannet_2d_3dcoord_grounding_train
 
 # Output configuration
-run_name="qwen2.5-3b-3dvl-coco3d-scannet2d-stage2"
-output_dir=./Qwen2.5-VL-3B-Instruct-SFT3D-coco3d-scannet2d-stage2
+run_name="qwen2.5-3b-3dvl-vggt-scannet2d-stage2"
+output_dir=./Qwen2.5-VL-3B-Instruct-3dvl-vggt-scannet2d-stage2
 
 # Training arguments
 args="
@@ -39,7 +39,7 @@ args="
     --tune_mm_vision False \
     --tune_mm_mlp True \
     --tune_mm_llm True \
-    --tune_mm_coord True \
+    --tune_mm_vggt True \
     --bf16 \
     --output_dir ${output_dir} \
     --num_train_epochs 1.0 \
@@ -53,9 +53,9 @@ args="
     --save_steps 1000 \
     --save_total_limit 20 \
     --learning_rate ${lr} \
-    --mm_projector_lr 2e-6 \
+    --mm_projector_lr 1e-5 \
     --vision_tower_lr ${lr} \
-    --coord_tower_lr 2e-6 \
+    --vggt_tower_lr 1e-5 \
     --weight_decay 0.01 \
     --warmup_ratio 0.03 \
     --max_grad_norm 1 \

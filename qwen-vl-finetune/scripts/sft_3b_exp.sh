@@ -1,7 +1,7 @@
 #!/bin/bash
 export HF_ENDPOINT=https://hf-mirror.com
-NPROC_PER_NODE=8
-WANDB_MODE="offline"
+NPROC_PER_NODE=2
+export WANDB_MODE="offline"
 
 # Distributed training configuration
 MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
@@ -45,7 +45,7 @@ args="
     --per_device_train_batch_size ${batch_size} \
     --per_device_eval_batch_size $((batch_size*2)) \
     --gradient_accumulation_steps ${grad_accum_steps} \
-    --max_pixels 100352 \
+    --max_pixels 200704 \
     --min_pixels 784 \
     --eval_strategy "no" \
     --save_strategy "steps" \

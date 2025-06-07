@@ -54,7 +54,6 @@ args="
     --learning_rate ${lr} \
     --mm_projector_lr 1e-5 \
     --vision_tower_lr 1e-6 \
-    --vggt_tower_lr 1e-5 \
     --weight_decay 0.01 \
     --warmup_ratio 0.03 \
     --max_grad_norm 1 \

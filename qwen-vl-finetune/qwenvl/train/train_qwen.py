@@ -44,6 +44,9 @@ from qwenvl.train.argument import (
 )
 from transformers import AutoTokenizer, AutoProcessor, Qwen2VLImageProcessor, Trainer
 
+from qwenvl.model.qwen2_5_3dvl import Qwen2_5_3DVL_ForConditionalGeneration
+
+
 local_rank = None
 
 
@@ -104,12 +107,19 @@ def train(attn_implementation="flash_attention_2"):
     os.makedirs(training_args.output_dir, exist_ok=True)
 
     if "qwen2.5" in model_args.model_name_or_path.lower():
-        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            attn_implementation=attn_implementation,
-            torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+        # model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        #     model_args.model_name_or_path,
+        #     cache_dir=training_args.cache_dir,
+        #     attn_implementation=attn_implementation,
+        #     torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+        # )
+        model = Qwen2_5_3DVL_ForConditionalGeneration.from_pretrained(
+                model_args.model_name_or_path,
+                cache_dir=training_args.cache_dir,
+                attn_implementation=attn_implementation,
+                torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
         )
+        
         data_args.image_processor = AutoProcessor.from_pretrained(
             model_args.model_name_or_path,
         ).image_processor

@@ -24,6 +24,7 @@ import transformers
 
 from . import data_list
 from .rope2d import get_rope_index_25, get_rope_index_2
+from .camera_utils import load_camera_parameters, adjust_camera_parameters, generate_ray_direction_grid
 
 IGNORE_INDEX = -100
 IMAGE_TOKEN_INDEX = 151655
@@ -230,16 +231,36 @@ class LazySupervisedDataset(Dataset):
             print("No pre-calculated length available.")
             return np.array([1] * len(self.list_data_dict))
 
-    def process_image_unified(self, image_file):
+    def process_image_unified(self, image_file, camera_params_path=None):
         processor = copy.deepcopy(self.data_args.image_processor)
         image = Image.open(image_file).convert("RGB")
-
+        
+        # Get original image size
+        original_size = image.size[::-1]  # (height, width)
+        
+        # Process image
         visual_processed = processor.preprocess(image, return_tensors="pt")
         image_tensor = visual_processed["pixel_values"]
         if isinstance(image_tensor, List):
             image_tensor = image_tensor[0]
         grid_thw = visual_processed["image_grid_thw"][0]
-        return image_tensor, grid_thw
+        
+        # Handle camera parameters if available
+        ray_directions = None
+        if camera_params_path:
+            # Load and adjust camera parameters
+            camera_params = load_camera_parameters(camera_params_path)
+            if camera_params:
+                # Get new image size after processing
+                new_size = (image_tensor.shape[-2], image_tensor.shape[-1])
+                adjusted_params = adjust_camera_parameters(camera_params, original_size, new_size)
+                
+                # Generate ray direction grid
+                ray_directions = generate_ray_direction_grid(
+                    new_size[0], new_size[1], adjusted_params, device=image_tensor.device
+                )
+        
+        return image_tensor, grid_thw, ray_directions
 
     def process_video(self, video_file):
         decord_video = None
@@ -368,26 +389,33 @@ class LazySupervisedDataset(Dataset):
         grid_thw = None
         video_grid_thw = None
         second_per_grid_ts = None
+        ray_directions = None
 
         if "image" in sources[0]:
             image_folder = self.list_data_dict[i]["data_path"]
             image_file = self.list_data_dict[i]["image"]
+            camera_params_path = self.list_data_dict[i].get("camera_parameters", [None])[0]
+            if camera_params_path:
+                camera_params_path = os.path.join(image_folder, camera_params_path)
+            
             if isinstance(image_file, List):
                 if len(image_file) > 1:
                     image_file = [
                         os.path.join(image_folder, file) for file in image_file
                     ]
-                    results = [self.process_image_unified(file) for file in image_file]
-                    image, grid_thw = zip(*results)
+                    results = [self.process_image_unified(file, camera_params_path) for file in image_file]
+                    image, grid_thw, ray_dirs = zip(*results)
+                    ray_directions = torch.stack(ray_dirs) if ray_dirs[0] is not None else None
                 else:
                     image_file = image_file[0]
                     image_file = os.path.join(image_folder, image_file)
-                    image, grid_thw = self.process_image_unified(image_file)
+                    image, grid_thw, ray_directions = self.process_image_unified(image_file, camera_params_path)
                     image = [image]
             else:
                 image_file = os.path.join(image_folder, image_file)
-                image, grid_thw = self.process_image_unified(image_file)
+                image, grid_thw, ray_directions = self.process_image_unified(image_file, camera_params_path)
                 image = [image]
+            
             grid_thw_merged = copy.deepcopy(grid_thw)
             if not isinstance(grid_thw, Sequence):
                 grid_thw_merged = [grid_thw_merged]
@@ -464,6 +492,8 @@ class LazySupervisedDataset(Dataset):
             data_dict["image_grid_thw"] = torch.cat(
                 [thw.unsqueeze(0) for thw in grid_thw], dim=0
             )
+            if ray_directions is not None:
+                data_dict["ray_directions"] = ray_directions
         # video exist in the data
         elif "video" in self.list_data_dict[i]:
             data_dict["pixel_values_videos"] = torch.cat(video, dim=0)

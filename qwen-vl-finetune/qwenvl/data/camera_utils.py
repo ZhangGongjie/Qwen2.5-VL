@@ -67,13 +67,13 @@ def adjust_camera_parameters(
     
     return adjusted_params
 
-def generate_ray_direction_grid(
+def generate_camera_aware_position_encoding_grid(
     height: int,
     width: int,
     camera_params: Dict,
     device: str = 'cpu'
 ) -> torch.Tensor:
-    """Generate a grid of ray directions based on camera parameters.
+    """Generate a grid of position embeddings based on camera parameters.
     
     Args:
         height: Image height
@@ -82,7 +82,7 @@ def generate_ray_direction_grid(
         device: Device to place the tensor on
         
     Returns:
-        Tensor of shape (height, width, 3) containing normalized ray directions
+        Tensor of shape (height, width, 2) containing camera-aware position encodings
     """
     if camera_params is None:
         # If no camera parameters, return a default grid (all rays pointing forward)
@@ -102,13 +102,8 @@ def generate_ray_direction_grid(
     # Calculate ray directions
     x = (u - camera_params['cx']) / camera_params['fx']
     y = (v - camera_params['cy']) / camera_params['fy']
-    z = torch.ones_like(x)
     
-    # Stack coordinates
-    rays = torch.stack([x, y, z], dim=-1)
-    
-    # Normalize ray directions
-    ray_norms = torch.norm(rays, dim=-1, keepdim=True)
-    rays = rays / ray_norms
+    # Stack
+    rays = torch.stack([x, y], dim=-1)
     
     return rays 

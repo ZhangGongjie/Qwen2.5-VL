@@ -40,7 +40,7 @@ class RayDirectionEmbedding(nn.Module):
         
         # MLP to project encoded ray directions to hidden size
         self.mlp = nn.Sequential(
-            nn.Linear(num_frequencies * 6, hidden_size),  # 6 = 3 coordinates * 2 (sin/cos)
+            nn.Linear(num_frequencies * 2, hidden_size),  # 6 = 3 coordinates * 2 (sin/cos)
             nn.LayerNorm(hidden_size),
             nn.GELU(),
             nn.Linear(hidden_size, hidden_size)
@@ -83,7 +83,7 @@ class Qwen2_5_3DVL_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
     def __init__(self, config):
         super().__init__(config)
         # Add ray direction embedding module
-        self.ray_embedding = RayDirectionEmbedding(config.hidden_size)
+        self.cam_aware_embedding_module = RayDirectionEmbedding(config.hidden_size)
 
     @classmethod
     def from_pretrained(
@@ -185,7 +185,7 @@ class Qwen2_5_3DVL_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
                 # Add 3D camera-aware positional embedding if ray directions are provided
                 if ray_directions is not None:
                     # Generate ray direction embeddings
-                    ray_embeds = self.ray_embedding(ray_directions)
+                    ray_embeds = self.cam_aware_embedding_module(ray_directions)
                     
                     # Reshape ray embeddings to match image embeddings
                     batch_size = image_embeds.shape[0]

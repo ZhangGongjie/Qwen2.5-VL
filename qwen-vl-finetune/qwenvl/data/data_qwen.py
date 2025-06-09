@@ -24,7 +24,7 @@ import transformers
 
 from . import data_list
 from .rope2d import get_rope_index_25, get_rope_index_2
-from .camera_utils import load_camera_parameters, adjust_camera_parameters, generate_ray_direction_grid
+from .camera_utils import load_camera_parameters, adjust_camera_parameters, generate_camera_aware_position_encoding_grid
 
 IGNORE_INDEX = -100
 IMAGE_TOKEN_INDEX = 151655
@@ -273,7 +273,7 @@ class LazySupervisedDataset(Dataset):
         grid_thw = visual_processed["image_grid_thw"][0]
         
         # Handle camera parameters if available
-        ray_directions = None
+        camera_aware_position_embeddings = None
         if camera_params_path:
             # Load and adjust camera parameters
             camera_params = load_camera_parameters(camera_params_path)
@@ -284,12 +284,12 @@ class LazySupervisedDataset(Dataset):
                 )
                 adjusted_params = adjust_camera_parameters(camera_params, original_size, new_size)
                 
-                # Generate ray direction grid
-                ray_directions = generate_ray_direction_grid(
+                # Generate camera aware position embedding grid
+                camera_aware_position_embeddings = generate_camera_aware_position_encoding_grid(
                     new_size[0], new_size[1], adjusted_params, device=image_tensor.device
                 )
         
-        return image_tensor, grid_thw, ray_directions
+        return image_tensor, grid_thw, camera_aware_position_embeddings
 
     def process_video(self, video_file):
         decord_video = None
@@ -418,7 +418,7 @@ class LazySupervisedDataset(Dataset):
         grid_thw = None
         video_grid_thw = None
         second_per_grid_ts = None
-        ray_directions = None
+        camera_aware_position_embeddings = None
 
         if "image" in sources[0]:
             image_folder = self.list_data_dict[i]["data_path"]
@@ -433,16 +433,16 @@ class LazySupervisedDataset(Dataset):
                         os.path.join(image_folder, file) for file in image_file
                     ]
                     results = [self.process_image_unified(file, camera_params_path) for file in image_file]
-                    image, grid_thw, ray_dirs = zip(*results)
-                    ray_directions = torch.stack(ray_dirs) if ray_dirs[0] is not None else None
+                    image, grid_thw, cam_aware_pes = zip(*results)
+                    camera_aware_position_embeddings = torch.stack(cam_aware_pes) if cam_aware_pes[0] is not None else None
                 else:
                     image_file = image_file[0]
                     image_file = os.path.join(image_folder, image_file)
-                    image, grid_thw, ray_directions = self.process_image_unified(image_file, camera_params_path)
+                    image, grid_thw, camera_aware_position_embeddings = self.process_image_unified(image_file, camera_params_path)
                     image = [image]
             else:
                 image_file = os.path.join(image_folder, image_file)
-                image, grid_thw, ray_directions = self.process_image_unified(image_file, camera_params_path)
+                image, grid_thw, camera_aware_position_embeddings = self.process_image_unified(image_file, camera_params_path)
                 image = [image]
             
             grid_thw_merged = copy.deepcopy(grid_thw)
@@ -521,8 +521,8 @@ class LazySupervisedDataset(Dataset):
             data_dict["image_grid_thw"] = torch.cat(
                 [thw.unsqueeze(0) for thw in grid_thw], dim=0
             )
-            if ray_directions is not None:
-                data_dict["ray_directions"] = ray_directions
+            if camera_aware_position_embeddings is not None:
+                data_dict["camera_aware_position_embeddings"] = camera_aware_position_embeddings
         # video exist in the data
         elif "video" in self.list_data_dict[i]:
             data_dict["pixel_values_videos"] = torch.cat(video, dim=0)

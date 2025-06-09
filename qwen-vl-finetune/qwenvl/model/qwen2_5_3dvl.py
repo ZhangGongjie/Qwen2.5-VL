@@ -27,7 +27,7 @@ def is_rank0():
     return not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0
 
 
-class RayDirectionEmbedding(nn.Module):
+class CamAwarePositionEmbedding(nn.Module):
     """3D camera-aware positional embedding using sinusoidal encoding."""
     
     def __init__(self, hidden_size: int, num_frequencies: int = 10):
@@ -46,23 +46,23 @@ class RayDirectionEmbedding(nn.Module):
             nn.Linear(hidden_size, hidden_size)
         )
         
-    def forward(self, ray_directions: torch.Tensor) -> torch.Tensor:
+    def forward(self, camera_aware_position_embeddings: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            ray_directions: Tensor of shape (batch_size, height, width, 3) containing normalized ray directions
+            camera_aware_position_embeddings: Tensor of shape (batch_size, height, width, 3) containing normalized ray directions
             
         Returns:
             Tensor of shape (batch_size, height, width, hidden_size) containing ray direction embeddings
         """
         # Expand frequency bands to match input dimensions
-        freq_bands = self.freq_bands.to(ray_directions.device)
+        freq_bands = self.freq_bands.to(camera_aware_position_embeddings.device)
         freq_bands = freq_bands.view(1, 1, 1, 1, -1)  # Shape: (1, 1, 1, 1, num_frequencies)
         
         # Expand ray directions for broadcasting
-        ray_directions = ray_directions.unsqueeze(-1)  # Shape: (batch_size, height, width, 3, 1)
+        camera_aware_position_embeddings = camera_aware_position_embeddings.unsqueeze(-1)  # Shape: (batch_size, height, width, 3, 1)
         
         # Compute sin and cos for each frequency
-        proj = (2.0 * math.pi * ray_directions) * freq_bands  # Shape: (batch_size, height, width, 3, num_frequencies)
+        proj = (2.0 * math.pi * camera_aware_position_embeddings) * freq_bands  # Shape: (batch_size, height, width, 3, num_frequencies)
         sin_proj = torch.sin(proj)  # Shape: (batch_size, height, width, 3, num_frequencies)
         cos_proj = torch.cos(proj)  # Shape: (batch_size, height, width, 3, num_frequencies)
         
@@ -70,7 +70,7 @@ class RayDirectionEmbedding(nn.Module):
         encoded = torch.cat([sin_proj, cos_proj], dim=-1)  # Shape: (batch_size, height, width, 3, num_frequencies*2)
         
         # Reshape for MLP
-        batch_size, height, width = ray_directions.shape[:3]
+        batch_size, height, width = camera_aware_position_embeddings.shape[:3]
         encoded = encoded.reshape(batch_size, height, width, -1)  # Shape: (batch_size, height, width, 3*num_frequencies*2)
         
         # Project to hidden size
@@ -83,7 +83,7 @@ class Qwen2_5_3DVL_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
     def __init__(self, config):
         super().__init__(config)
         # Add ray direction embedding module
-        self.cam_aware_embedding_module = RayDirectionEmbedding(config.hidden_size)
+        self.cam_aware_embedding_module = CamAwarePositionEmbedding(config.hidden_size)
 
     @classmethod
     def from_pretrained(
@@ -126,15 +126,15 @@ class Qwen2_5_3DVL_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
         rope_deltas: Optional[torch.LongTensor] = None,
         cache_position: Optional[torch.LongTensor] = None,
         second_per_grid_ts: Optional[torch.Tensor] = None,
-        ray_directions: Optional[torch.Tensor] = None,  # New parameter for ray directions
+        camera_aware_position_embeddings: Optional[torch.Tensor] = None,
     ) -> Union[Tuple, Qwen2_5_VLCausalLMOutputWithPast]:
         r"""
             labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
                 Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
                 config.vocab_size]` or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored
                 (masked), the loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`.
-            ray_directions (`torch.Tensor` of shape `(batch_size, height, width, 3)`, *optional*):
-                Normalized ray directions for each pixel in the image. Used for 3D camera-aware positional embedding.
+            camera_aware_position_embeddings (`torch.Tensor` of shape `(batch_size, height, width, 2)`, *optional*):
+                TODO
 
         Returns:
 
@@ -183,9 +183,9 @@ class Qwen2_5_3DVL_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
                 image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
                 
                 # Add 3D camera-aware positional embedding if ray directions are provided
-                if ray_directions is not None:
+                if camera_aware_position_embeddings is not None:
                     # Generate ray direction embeddings
-                    ray_embeds = self.cam_aware_embedding_module(ray_directions)
+                    ray_embeds = self.cam_aware_embedding_module(camera_aware_position_embeddings)
                     
                     # Reshape ray embeddings to match image embeddings
                     batch_size = image_embeds.shape[0]

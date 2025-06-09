@@ -600,7 +600,7 @@ class DataCollatorForSupervisedDataset(object):
                 if "camera_aware_position_embeddings" in instance
             ]
             if camera_aware_position_embeddings:
-                batch["camera_aware_position_embeddings"] = torch.cat(camera_aware_position_embeddings, dim=0)
+                batch["camera_aware_position_embeddings"] = camera_aware_position_embeddings
         else:
             concat_images = None
             grid_thw = None
@@ -682,7 +682,7 @@ class FlattenedDataCollatorForSupervisedDataset(DataCollatorForSupervisedDataset
                 if "camera_aware_position_embeddings" in instance
             ]
             if camera_aware_position_embeddings:
-                batch["camera_aware_position_embeddings"] = torch.cat(camera_aware_position_embeddings, dim=0)
+                batch["camera_aware_position_embeddings"] = camera_aware_position_embeddings
         else:
             concat_images = None
             grid_thw = None

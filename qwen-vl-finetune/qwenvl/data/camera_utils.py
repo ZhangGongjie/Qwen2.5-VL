@@ -86,7 +86,7 @@ def generate_camera_aware_position_encoding_grid(
     """
     if camera_params is None:
         # If no camera parameters, return a default grid (all rays pointing forward)
-        return torch.zeros((height, width, 3), device=device)
+        return torch.zeros((height, width, 2), device=device)
     
     # Create coordinate grids
     v, u = torch.meshgrid(
@@ -104,6 +104,6 @@ def generate_camera_aware_position_encoding_grid(
     y = (v - camera_params['cy']) / camera_params['fy']
     
     # Stack
-    rays = torch.stack([x, y], dim=-1)
+    grid = torch.stack([x, y], dim=-1)
     
-    return rays 
+    return grid 

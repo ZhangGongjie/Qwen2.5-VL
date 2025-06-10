@@ -39,6 +39,7 @@ args="
     --tune_mm_vision False \
     --tune_mm_mlp True \
     --tune_mm_llm True \
+    --tune_mm_cam_aware True \
     --bf16 \
     --output_dir ${output_dir} \
     --num_train_epochs 1.0 \
@@ -54,6 +55,7 @@ args="
     --learning_rate ${lr} \
     --mm_projector_lr 1e-5 \
     --vision_tower_lr 1e-6 \
+    --cam_aware_lr 1e-5 \
     --weight_decay 0.01 \
     --warmup_ratio 0.03 \
     --max_grad_norm 1 \

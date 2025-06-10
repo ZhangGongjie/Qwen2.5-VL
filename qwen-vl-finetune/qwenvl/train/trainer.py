@@ -224,88 +224,209 @@ def create_optimizer(self):
                 vision_tower_parameters = [
                     name for name, _ in opt_model.named_parameters() if "visual" in name
                 ]
-                optimizer_grouped_parameters = [
-                    {
-                        "params": [
-                            p
-                            for n, p in opt_model.named_parameters()
-                            if (
-                                n in decay_parameters
-                                and n not in projector_parameters
-                                and n not in vision_tower_parameters
-                                and p.requires_grad
-                            )
-                        ],
-                        "weight_decay": self.args.weight_decay,
-                    },
-                    {
-                        "params": [
-                            p
-                            for n, p in opt_model.named_parameters()
-                            if (
-                                n in decay_parameters
-                                and n not in projector_parameters
-                                and n in vision_tower_parameters
-                                and p.requires_grad
-                            )
-                        ],
-                        "weight_decay": self.args.weight_decay,
-                        "lr": self.args.vision_tower_lr,
-                    },
-                    {
-                        "params": [
-                            p
-                            for n, p in opt_model.named_parameters()
-                            if (
-                                n not in decay_parameters
-                                and n not in projector_parameters
-                                and n not in vision_tower_parameters
-                                and p.requires_grad
-                            )
-                        ],
-                        "weight_decay": 0.0,
-                    },
-                    {
-                        "params": [
-                            p
-                            for n, p in opt_model.named_parameters()
-                            if (
-                                n not in decay_parameters
-                                and n not in projector_parameters
-                                and n in vision_tower_parameters
-                                and p.requires_grad
-                            )
-                        ],
-                        "weight_decay": 0.0,
-                        "lr": self.args.vision_tower_lr,
-                    },
-                    {
-                        "params": [
-                            p
-                            for n, p in opt_model.named_parameters()
-                            if (
-                                n in decay_parameters
-                                and n in projector_parameters
-                                and p.requires_grad
-                            )
-                        ],
-                        "weight_decay": self.args.weight_decay,
-                        "lr": self.args.mm_projector_lr,
-                    },
-                    {
-                        "params": [
-                            p
-                            for n, p in opt_model.named_parameters()
-                            if (
-                                n not in decay_parameters
-                                and n in projector_parameters
-                                and p.requires_grad
-                            )
-                        ],
-                        "weight_decay": 0.0,
-                        "lr": self.args.mm_projector_lr,
-                    },
-                ]
+                if self.args.cam_aware_lr is not None and self.args.cam_aware_lr != 0:
+                    cam_aware_parameters = [
+                        name for name, _ in opt_model.named_parameters() if "cam_aware" in name
+                    ]
+                    optimizer_grouped_parameters = [
+                        {
+                            "params": [
+                                p
+                                for n, p in opt_model.named_parameters()
+                                if (
+                                    n in decay_parameters
+                                    and n not in projector_parameters
+                                    and n not in vision_tower_parameters
+                                    and n not in cam_aware_parameters
+                                    and p.requires_grad
+                                )
+                            ],
+                            "weight_decay": self.args.weight_decay,
+                        },
+                        {
+                            "params": [
+                                p
+                                for n, p in opt_model.named_parameters()
+                                if (
+                                    n in decay_parameters
+                                    and n not in projector_parameters
+                                    and n in vision_tower_parameters
+                                    and n not in cam_aware_parameters
+                                    and p.requires_grad
+                                )
+                            ],
+                            "weight_decay": self.args.weight_decay,
+                            "lr": self.args.vision_tower_lr,
+                        },
+                        {
+                            "params": [
+                                p
+                                for n, p in opt_model.named_parameters()
+                                if (
+                                    n in decay_parameters
+                                    and n not in projector_parameters
+                                    and n not in vision_tower_parameters
+                                    and n in cam_aware_parameters
+                                    and p.requires_grad
+                                )
+                            ],
+                            "weight_decay": self.args.weight_decay,
+                            "lr": self.args.cam_aware_lr,
+                        },
+                        {
+                            "params": [
+                                p
+                                for n, p in opt_model.named_parameters()
+                                if (
+                                    n not in decay_parameters
+                                    and n not in projector_parameters
+                                    and n not in vision_tower_parameters
+                                    and n not in cam_aware_parameters
+                                    and p.requires_grad
+                                )
+                            ],
+                            "weight_decay": 0.0,
+                        },
+                        {
+                            "params": [
+                                p
+                                for n, p in opt_model.named_parameters()
+                                if (
+                                    n not in decay_parameters
+                                    and n not in projector_parameters
+                                    and n in vision_tower_parameters
+                                    and n not in cam_aware_parameters
+                                    and p.requires_grad
+                                )
+                            ],
+                            "weight_decay": 0.0,
+                            "lr": self.args.vision_tower_lr,
+                        },
+                        {
+                            "params": [
+                                p
+                                for n, p in opt_model.named_parameters()
+                                if (
+                                    n not in decay_parameters
+                                    and n not in projector_parameters
+                                    and n not in vision_tower_parameters
+                                    and n in cam_aware_parameters
+                                    and p.requires_grad
+                                )
+                            ],
+                            "weight_decay": 0.0,
+                            "lr": self.args.cam_aware_lr,
+                        },
+                        {
+                            "params": [
+                                p
+                                for n, p in opt_model.named_parameters()
+                                if (
+                                    n in decay_parameters
+                                    and n in projector_parameters
+                                    and p.requires_grad
+                                )
+                            ],
+                            "weight_decay": self.args.weight_decay,
+                            "lr": self.args.mm_projector_lr,
+                        },
+                        {
+                            "params": [
+                                p
+                                for n, p in opt_model.named_parameters()
+                                if (
+                                    n not in decay_parameters
+                                    and n in projector_parameters
+                                    and p.requires_grad
+                                )
+                            ],
+                            "weight_decay": 0.0,
+                            "lr": self.args.mm_projector_lr,
+                        },
+                    ]
+                else:
+                    optimizer_grouped_parameters = [
+                        {
+                            "params": [
+                                p
+                                for n, p in opt_model.named_parameters()
+                                if (
+                                    n in decay_parameters
+                                    and n not in projector_parameters
+                                    and n not in vision_tower_parameters
+                                    and p.requires_grad
+                                )
+                            ],
+                            "weight_decay": self.args.weight_decay,
+                        },
+                        {
+                            "params": [
+                                p
+                                for n, p in opt_model.named_parameters()
+                                if (
+                                    n in decay_parameters
+                                    and n not in projector_parameters
+                                    and n in vision_tower_parameters
+                                    and p.requires_grad
+                                )
+                            ],
+                            "weight_decay": self.args.weight_decay,
+                            "lr": self.args.vision_tower_lr,
+                        },
+                        {
+                            "params": [
+                                p
+                                for n, p in opt_model.named_parameters()
+                                if (
+                                    n not in decay_parameters
+                                    and n not in projector_parameters
+                                    and n not in vision_tower_parameters
+                                    and p.requires_grad
+                                )
+                            ],
+                            "weight_decay": 0.0,
+                        },
+                        {
+                            "params": [
+                                p
+                                for n, p in opt_model.named_parameters()
+                                if (
+                                    n not in decay_parameters
+                                    and n not in projector_parameters
+                                    and n in vision_tower_parameters
+                                    and p.requires_grad
+                                )
+                            ],
+                            "weight_decay": 0.0,
+                            "lr": self.args.vision_tower_lr,
+                        },
+                        {
+                            "params": [
+                                p
+                                for n, p in opt_model.named_parameters()
+                                if (
+                                    n in decay_parameters
+                                    and n in projector_parameters
+                                    and p.requires_grad
+                                )
+                            ],
+                            "weight_decay": self.args.weight_decay,
+                            "lr": self.args.mm_projector_lr,
+                        },
+                        {
+                            "params": [
+                                p
+                                for n, p in opt_model.named_parameters()
+                                if (
+                                    n not in decay_parameters
+                                    and n in projector_parameters
+                                    and p.requires_grad
+                                )
+                            ],
+                            "weight_decay": 0.0,
+                            "lr": self.args.mm_projector_lr,
+                        },
+                    ]
             else:
                 optimizer_grouped_parameters = [
                     {

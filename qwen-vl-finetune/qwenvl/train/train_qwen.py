@@ -85,6 +85,17 @@ def set_model(model_args, model):
         for n, p in model.visual.merger.named_parameters():
             p.requires_grad = False
 
+    if model_args.tune_mm_cam_aware:
+        for n, p in model.cam_aware_embedding_module.named_parameters():
+            p.requires_grad = True
+        for n, p in model.cam_aware_merger.named_parameters():
+            p.requires_grad = True
+    else:
+        for n, p in model.cam_aware_embedding_module.named_parameters():
+            p.requires_grad = False
+        for n, p in model.cam_aware_merger.named_parameters():
+            p.requires_grad = False
+
     if model_args.tune_mm_llm:
         for n, p in model.model.named_parameters():
             p.requires_grad = True

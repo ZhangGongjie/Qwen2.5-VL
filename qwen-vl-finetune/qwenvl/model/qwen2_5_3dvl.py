@@ -27,56 +27,89 @@ def is_rank0():
     return not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0
 
 
+import torch
+import torch.nn as nn
+import math
+
 class CamAwarePositionEmbedding(nn.Module):
-    """3D camera-aware positional embedding using sinusoidal encoding."""
-    
-    def __init__(self, hidden_size: int, num_frequencies: int = 10):
+    def __init__(self, hidden_size: int, temperature: float = 10000.0):
+        """
+        Initializes the positional embedding module.
+
+        Args:
+            hidden_size (int): The target hidden dimension of the model (C_out). Must be an even number.
+            temperature (float): The temperature hyperparameter in the sinusoidal encoding, used to control the frequency range.
+        """
         super().__init__()
-        self.num_frequencies = num_frequencies
-        self.hidden_size = hidden_size
         
-        # Create frequency bands for positional encoding
-        self.freq_bands = 2.0 ** torch.linspace(0.0, num_frequencies - 1, num_frequencies)
+        if hidden_size % 2 != 0:
+            raise ValueError(f"The hidden_size must be an even number, but received {hidden_size}")
+            
+        # Halve the hidden_size to encode x and y dimensions separately
+        self.dim_t = hidden_size // 2
+        self.temperature = temperature
+
+        # Create the division term for frequency scaling
+        # Shape: [dim_t / 2]
+        div_term = torch.exp(
+            torch.arange(0, self.dim_t, 2, dtype=torch.float) *
+            (-math.log(self.temperature) / self.dim_t)
+        )
+        # Register as a buffer, so it moves to the correct device with the model but is not a trainable parameter
+        self.register_buffer("div_term", div_term)
         
-        # MLP to project encoded ray directions to hidden size
+        # Define a small MLP to add learnability to the fixed sinusoidal encoding
         self.mlp = nn.Sequential(
-            nn.Linear(num_frequencies * 2, hidden_size),  # 6 = 3 coordinates * 2 (sin/cos)
-            nn.LayerNorm(hidden_size),
+            nn.Linear(hidden_size, hidden_size),
             nn.GELU(),
             nn.Linear(hidden_size, hidden_size)
         )
-        
-    def forward(self, camera_aware_position_embeddings: torch.Tensor) -> torch.Tensor:
+
+    def forward(self, coords: torch.Tensor) -> torch.Tensor:
         """
+        Generates positional embeddings for the input coordinates.
+
         Args:
-            camera_aware_position_embeddings: Tensor of shape (batch_size, height, width, 3) containing normalized ray directions
-            
+            coords (torch.Tensor): A tensor of shape [N, 2] containing the (x, y) coordinates
+                                   for N points. It's recommended that the coordinates are
+                                   normalized to a range like [0, 1].
+
         Returns:
-            Tensor of shape (batch_size, height, width, hidden_size) containing ray direction embeddings
+            torch.Tensor: A tensor of shape [N, hidden_size] containing the positional embeddings.
         """
-        # Expand frequency bands to match input dimensions
-        freq_bands = self.freq_bands.to(camera_aware_position_embeddings.device)
-        freq_bands = freq_bands.view(1, 1, 1, 1, -1)  # Shape: (1, 1, 1, 1, num_frequencies)
+        # Assume input coordinates are normalized; scale them by 2*pi for better periodic features.
+        # This scaling can be adjusted based on the actual coordinate range.
+        coords = coords * 2.0 * math.pi
         
-        # Expand ray directions for broadcasting
-        camera_aware_position_embeddings = camera_aware_position_embeddings.unsqueeze(-1)  # Shape: (batch_size, height, width, 3, 1)
+        # Separate x and y coordinates and prepare for broadcasting
+        # Shape of coords_x, coords_y: [N] -> [N, 1]
+        coords_x = coords[:, 0].unsqueeze(1)
+        coords_y = coords[:, 1].unsqueeze(1)
         
-        # Compute sin and cos for each frequency
-        proj = (2.0 * math.pi * camera_aware_position_embeddings) * freq_bands  # Shape: (batch_size, height, width, 3, num_frequencies)
-        sin_proj = torch.sin(proj)  # Shape: (batch_size, height, width, 3, num_frequencies)
-        cos_proj = torch.cos(proj)  # Shape: (batch_size, height, width, 3, num_frequencies)
+        # Calculate the product of coordinates and frequencies
+        # [N, 1] * [dim_t / 2] -> [N, dim_t / 2]
+        pos_x = coords_x * self.div_term
+        pos_y = coords_y * self.div_term
         
-        # Concatenate sin and cos projections
-        encoded = torch.cat([sin_proj, cos_proj], dim=-1)  # Shape: (batch_size, height, width, 3, num_frequencies*2)
+        # Initialize embedding vectors
+        embedding_x = torch.zeros(coords.shape[0], self.dim_t, device=coords.device)
+        embedding_y = torch.zeros(coords.shape[0], self.dim_t, device=coords.device)
         
-        # Reshape for MLP
-        batch_size, height, width = camera_aware_position_embeddings.shape[:3]
-        encoded = encoded.reshape(batch_size, height, width, -1)  # Shape: (batch_size, height, width, 3*num_frequencies*2)
+        # Encode using interleaved sine and cosine functions
+        # Use sin for even indices, cos for odd indices
+        embedding_x[:, 0::2] = torch.sin(pos_x)
+        embedding_x[:, 1::2] = torch.cos(pos_x)
+        embedding_y[:, 0::2] = torch.sin(pos_y)
+        embedding_y[:, 1::2] = torch.cos(pos_y)
         
-        # Project to hidden size
-        ray_embeds = self.mlp(encoded)  # Shape: (batch_size, height, width, hidden_size)
+        # Concatenate the x and y embeddings to form the full [N, hidden_size] encoding
+        positional_embedding = torch.cat((embedding_x, embedding_y), dim=1)
+        positional_embedding = positional_embedding.to(coords.dtype)
         
-        return ray_embeds
+        # Add learnability through the MLP
+        output = self.mlp(positional_embedding)
+        
+        return output
 
 
 class Qwen2_5_3DVL_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
@@ -84,6 +117,12 @@ class Qwen2_5_3DVL_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
         super().__init__(config)
         # Add ray direction embedding module
         self.cam_aware_embedding_module = CamAwarePositionEmbedding(config.hidden_size)
+        self.cam_aware_merger = Qwen2_5_VLPatchMerger(
+            dim=config.hidden_size,
+            context_dim=config.hidden_size,
+            spatial_merge_size=self.visual.spatial_merge_size,
+        )
+
 
     @classmethod
     def from_pretrained(
@@ -186,10 +225,7 @@ class Qwen2_5_3DVL_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
                 if camera_aware_position_embeddings is not None:
                     # Generate ray direction embeddings
                     ray_embeds = self.cam_aware_embedding_module(camera_aware_position_embeddings)
-                    
-                    # Reshape ray embeddings to match image embeddings
-                    batch_size = image_embeds.shape[0]
-                    ray_embeds = ray_embeds.reshape(batch_size, -1, ray_embeds.shape[-1])
+                    ray_embeds = self.cam_aware_merger(ray_embeds)
                     
                     # Add ray embeddings to image embeddings
                     image_embeds = image_embeds + ray_embeds

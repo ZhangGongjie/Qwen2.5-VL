@@ -17,6 +17,11 @@ from collections.abc import Sequence
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+from torch.utils.data import Dataset
+from torch.utils.data import Dataset
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import Dataset
 from PIL import Image
 from decord import VideoReader
 from torchcodec.decoders import VideoDecoder
@@ -261,11 +266,10 @@ class LazySupervisedDataset(Dataset):
     def process_image_unified(self, image_file, camera_params_path=None):
         processor = copy.deepcopy(self.data_args.image_processor)
         image = Image.open(image_file).convert("RGB")
-        
-        # Get original image size
-        original_size = image.size[::-1]  # (height, width)
-        
-        # Process image
+
+        # Get original image size (height, width)
+        original_size = image.size[::-1]
+
         visual_processed = processor.preprocess(image, return_tensors="pt")
         image_tensor = visual_processed["pixel_values"]
         if isinstance(image_tensor, List):
@@ -278,17 +282,56 @@ class LazySupervisedDataset(Dataset):
             # Load and adjust camera parameters
             camera_params = load_camera_parameters(camera_params_path)
             if camera_params:
-                # Get new image size after processing
+                # Calculate the new image size after processing by the vision encoder
                 new_size = smart_resize(
-                    original_size[0], original_size[1], max_pixels=processor.max_pixels, min_pixels=processor.min_pixels
+                    original_size[0], original_size[1],
+                    max_pixels=processor.max_pixels,
+                    min_pixels=processor.min_pixels
                 )
                 adjusted_params = adjust_camera_parameters(camera_params, original_size, new_size)
-                
-                # Generate camera aware position embedding grid
-                camera_aware_position_embeddings = generate_camera_aware_position_encoding_grid(
+                # Adjust camera intrinsics based on the new resized dimensions
+                adjusted_params = adjust_camera_parameters(camera_params, original_size, new_size)
+
+                # Generate a position encoding grid for every pixel of the resized image
+                # Shape: [new_size_h, new_size_w, 2]
+                cam_pos_encoding_grid = generate_camera_aware_position_encoding_grid(
                     new_size[0], new_size[1], adjusted_params, device=image_tensor.device
                 )
-        
+
+                # Get the height and width of the visual token patch grid
+                h_patches, w_patches = grid_thw[1], grid_thw[2]
+
+                # Create a normalized sampling grid corresponding to the center of each patch.
+                # The coordinates must be in the range [-1, 1] for grid_sample.
+                # `align_corners=False` means that -1 and 1 correspond to the center
+                # of the corner pixels, which aligns with this coordinate generation.
+                y_coords = (torch.arange(h_patches, device=image_tensor.device) + 0.5) / h_patches * 2 - 1
+                x_coords = (torch.arange(w_patches, device=image_tensor.device) + 0.5) / w_patches * 2 - 1
+                
+                grid_y, grid_x = torch.meshgrid(y_coords, x_coords, indexing="ij")
+
+                # Stack to create the final sampling grid of (x, y) coordinates
+                # Shape: [1, h_patches, w_patches, 2]
+                sampling_grid = torch.stack((grid_x, grid_y), dim=-1).unsqueeze(0)
+
+                # Reshape the per-pixel encoding grid for grid_sample
+                # Input shape: [H, W, 2] -> [1, 2, H, W]
+                cam_pos_encoding_grid = cam_pos_encoding_grid.permute(2, 0, 1).unsqueeze(0)
+
+                # Sample the encoding grid at the patch center locations
+                # Output shape: [1, 2, h_patches, w_patches]
+                sampled_embeddings = F.grid_sample(
+                    cam_pos_encoding_grid,
+                    sampling_grid,
+                    mode='bilinear',
+                    padding_mode='border',
+                    align_corners=False
+                )
+
+                # Reshape the sampled embeddings to match the flattened visual tokens
+                # Final shape: [h_patches * w_patches, 2]
+                camera_aware_position_embeddings = sampled_embeddings.squeeze(0).flatten(start_dim=1).transpose(0, 1)
+
         return image_tensor, grid_thw, camera_aware_position_embeddings
 
     def process_video(self, video_file):
@@ -433,17 +476,18 @@ class LazySupervisedDataset(Dataset):
                         os.path.join(image_folder, file) for file in image_file
                     ]
                     results = [self.process_image_unified(file, camera_params_path) for file in image_file]
-                    image, grid_thw, cam_aware_pes = zip(*results)
-                    camera_aware_position_embeddings = torch.stack(cam_aware_pes) if cam_aware_pes[0] is not None else None
+                    image, grid_thw, camera_aware_position_embeddings = zip(*results)
                 else:
                     image_file = image_file[0]
                     image_file = os.path.join(image_folder, image_file)
                     image, grid_thw, camera_aware_position_embeddings = self.process_image_unified(image_file, camera_params_path)
                     image = [image]
+                    camera_aware_position_embeddings = [camera_aware_position_embeddings]
             else:
                 image_file = os.path.join(image_folder, image_file)
                 image, grid_thw, camera_aware_position_embeddings = self.process_image_unified(image_file, camera_params_path)
                 image = [image]
+                camera_aware_position_embeddings = [camera_aware_position_embeddings]
             
             grid_thw_merged = copy.deepcopy(grid_thw)
             if not isinstance(grid_thw, Sequence):
@@ -522,7 +566,7 @@ class LazySupervisedDataset(Dataset):
                 [thw.unsqueeze(0) for thw in grid_thw], dim=0
             )
             if camera_aware_position_embeddings is not None:
-                data_dict["camera_aware_position_embeddings"] = camera_aware_position_embeddings
+                data_dict["camera_aware_position_embeddings"] = torch.cat(camera_aware_position_embeddings, dim=0)
         # video exist in the data
         elif "video" in self.list_data_dict[i]:
             data_dict["pixel_values_videos"] = torch.cat(video, dim=0)
@@ -600,7 +644,7 @@ class DataCollatorForSupervisedDataset(object):
                 if "camera_aware_position_embeddings" in instance
             ]
             if camera_aware_position_embeddings:
-                batch["camera_aware_position_embeddings"] = camera_aware_position_embeddings
+                batch["camera_aware_position_embeddings"] = torch.cat(camera_aware_position_embeddings, dim=0)
         else:
             concat_images = None
             grid_thw = None
@@ -682,7 +726,7 @@ class FlattenedDataCollatorForSupervisedDataset(DataCollatorForSupervisedDataset
                 if "camera_aware_position_embeddings" in instance
             ]
             if camera_aware_position_embeddings:
-                batch["camera_aware_position_embeddings"] = camera_aware_position_embeddings
+                batch["camera_aware_position_embeddings"] = torch.cat(camera_aware_position_embeddings, dim=0)
         else:
             concat_images = None
             grid_thw = None

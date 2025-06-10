@@ -331,6 +331,53 @@ class LazySupervisedDataset(Dataset):
                 # Reshape the sampled embeddings to match the flattened visual tokens
                 # Final shape: [h_patches * w_patches, 2]
                 camera_aware_position_embeddings = sampled_embeddings.squeeze(0).flatten(start_dim=1).transpose(0, 1)
+        else:
+            # --- 1) Estimate intrinsics from original image size ---
+            h_orig, w_orig = original_size
+            # simple heuristic: focal = average of height & width
+            f_est = 0.5 * (h_orig + w_orig)
+            cx, cy = w_orig / 2, h_orig / 2
+
+            # build a camera-params dict matching what adjust_camera_parameters expects
+            camera_params = {
+                "fx": f_est,
+                "fy": f_est,
+                "cx": cx,
+                "cy": cy,
+            }
+
+            # --- 2) Resize and adjust intrinsics exactly as above ---
+            new_size = smart_resize(
+                original_size[0], original_size[1],
+                max_pixels=processor.max_pixels,
+                min_pixels=processor.min_pixels
+            )
+            adjusted_params = adjust_camera_parameters(camera_params, original_size, new_size)
+
+            # --- 3) Generate and sample the camera-aware positional grid ---
+            cam_pos_encoding_grid = generate_camera_aware_position_encoding_grid(
+                new_size[0], new_size[1], adjusted_params, device=image_tensor.device
+            )
+            h_patches, w_patches = grid_thw[1], grid_thw[2]
+            y_coords = (torch.arange(h_patches, device=image_tensor.device) + 0.5) / h_patches * 2 - 1
+            x_coords = (torch.arange(w_patches, device=image_tensor.device) + 0.5) / w_patches * 2 - 1
+            grid_y, grid_x = torch.meshgrid(y_coords, x_coords, indexing="ij")
+            sampling_grid = torch.stack((grid_x, grid_y), dim=-1).unsqueeze(0)
+            cam_pos_encoding_grid = cam_pos_encoding_grid.permute(2, 0, 1).unsqueeze(0)
+            sampled_embeddings = F.grid_sample(
+                cam_pos_encoding_grid,
+                sampling_grid,
+                mode="bilinear",
+                padding_mode="border",
+                align_corners=False
+            )
+
+            # flatten to [num_patches, 2]
+            camera_aware_position_embeddings = (
+                sampled_embeddings.squeeze(0)
+                                .flatten(start_dim=1)
+                                .transpose(0, 1)
+            )
 
         return image_tensor, grid_thw, camera_aware_position_embeddings
 

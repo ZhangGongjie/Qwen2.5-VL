@@ -288,7 +288,6 @@ class LazySupervisedDataset(Dataset):
                     max_pixels=processor.max_pixels,
                     min_pixels=processor.min_pixels
                 )
-                adjusted_params = adjust_camera_parameters(camera_params, original_size, new_size)
                 # Adjust camera intrinsics based on the new resized dimensions
                 adjusted_params = adjust_camera_parameters(camera_params, original_size, new_size)
 

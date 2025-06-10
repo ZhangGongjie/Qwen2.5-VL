@@ -32,7 +32,7 @@ import torch.nn as nn
 import math
 
 class CamAwarePositionEmbedding(nn.Module):
-    def __init__(self, hidden_size: int, temperature: float = 10000.0):
+    def __init__(self, hidden_size: int, temperature: float = 20.0):
         """
         Initializes the positional embedding module.
 
